@@ -20,13 +20,16 @@ pub const ZK_VERIFIER_PROGRAM_ID: Address =
     Address::from_str_const("AvND3W6TkZ9AenvsAyuPKSPSgLWZYmY2SPfb5T51pb7V");
 
 pub fn process_withdraw(accounts: &[AccountView], data: &[u8]) -> ProgramResult {
-    let [payer, recipient, vault, state_account, nullifier_account, zk_verifier, _system_program] =
+    // Accounts: [recipient, vault, state, nullifier, zk_verifier, system_program]
+    // No relayer needed — the recipient (new wallet) submits the TX and pays the
+    // base fee (~5000 lamports). The vault PDA funds the nullifier PDA rent.
+    let [recipient, vault, state_account, nullifier_account, zk_verifier, _system_program] =
         accounts
     else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
-    if !payer.is_signer() {
+    if !recipient.is_signer() {
         return Err(ProgramError::MissingRequiredSignature);
     }
 
@@ -114,6 +117,16 @@ pub fn process_withdraw(accounts: &[AccountView], data: &[u8]) -> ProgramResult 
             .map_err(|_| ProgramError::InvalidInstructionData)?,
     );
 
+    // Verify vault PDA.
+    let (vault_pda, vault_bump) = Address::find_program_address(&[b"vault"], &crate::ID);
+    if vault.address() != &vault_pda {
+        return Err(ProgramError::InvalidAccountData);
+    }
+
+    if !vault.owned_by(&crate::ID) {
+        return Err(ProgramError::InvalidAccountOwner);
+    }
+
     // CPI to ZK verifier.
     log("Verifying ZK proof...");
     let proof_data = &data[0..PROOF_LEN];
@@ -129,54 +142,57 @@ pub fn process_withdraw(accounts: &[AccountView], data: &[u8]) -> ProgramResult 
     invoke(&verify_ix, &[])?;
 
     // Initialize nullifier account after proof verification.
+    // The vault PDA pays the rent for the nullifier account (deducted from
+    // the withdrawal amount sent to the recipient).
     let rent = Rent::get()?;
     let space = 0;
-    let lamports = rent.try_minimum_balance(space)?;
+    let nullifier_rent = rent.try_minimum_balance(space)?;
 
-    let bump_seed = [bump];
-    let seeds = [
+    let null_bump_seed = [bump];
+    let null_seeds = [
         Seed::from(b"nullifier"),
         Seed::from(&submitted_nullifier),
-        Seed::from(&bump_seed),
+        Seed::from(&null_bump_seed),
     ];
-    let signer = [Signer::from(&seeds)];
+
+    let vault_bump_seed = [vault_bump];
+    let vault_seeds = [Seed::from(b"vault"), Seed::from(&vault_bump_seed)];
+
+    let signers = [Signer::from(&null_seeds), Signer::from(&vault_seeds)];
 
     CreateAccount {
-        from: payer,
+        from: vault,
         to: nullifier_account,
-        lamports,
+        lamports: nullifier_rent,
         space: 0,
         owner: &crate::ID,
     }
-    .invoke_signed(&signer)?;
+    .invoke_signed(&signers)?;
 
     // Transfer SOL from the vault to the recipient.
-    if vault.address() != &Address::find_program_address(&[b"vault"], &crate::ID).0 {
-        return Err(ProgramError::InvalidAccountData);
-    }
-
-    if !vault.owned_by(&crate::ID) {
-        return Err(ProgramError::InvalidAccountOwner);
-    }
-
-    // Keep the vault rent-exempt while withdrawing.
+    // Deduct the nullifier rent from the payout (vault already paid it above).
     let data_len = vault.data_len();
     let min_balance = Rent::get()?.try_minimum_balance(data_len)?;
     let withdrawable = vault
         .lamports()
         .checked_sub(min_balance)
         .ok_or(ProgramError::InsufficientFunds)?;
-    if amount_u64 > withdrawable {
+
+    let payout = amount_u64
+        .checked_sub(nullifier_rent)
+        .ok_or(ProgramError::InsufficientFunds)?;
+
+    if payout > withdrawable {
         return Err(ProgramError::InsufficientFunds);
     }
 
     let new_vault_balance = vault
         .lamports()
-        .checked_sub(amount_u64)
+        .checked_sub(payout)
         .ok_or(ProgramError::InsufficientFunds)?;
     let new_recipient_balance = recipient
         .lamports()
-        .checked_add(amount_u64)
+        .checked_add(payout)
         .ok_or(ProgramError::InsufficientFunds)?;
     vault.set_lamports(new_vault_balance);
     recipient.set_lamports(new_recipient_balance);

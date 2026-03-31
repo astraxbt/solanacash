@@ -21,11 +21,11 @@ Shielded Pool (repo)
 
 ### Flow Summary
 
-1) **Initialize**: relayer creates state + vault PDAs (fee payer = relayer).  
-2) **Deposit**: sender transfers SOL into the vault and updates the Merkle root.  
-3) **Withdraw**: relayer submits proof, program verifies the proof, consumes the nullifier, and releases SOL to the recipient.
+1) **Initialize**: admin creates state + vault PDAs.  
+2) **Deposit**: sender transfers SOL into the vault and updates the Merkle root. Receives a **note string** encoding their secrets.  
+3) **Withdraw**: recipient (any new wallet) submits proof, program verifies the proof, consumes the nullifier, and releases SOL to the recipient. **No relayer needed** — the vault PDA pays nullifier rent, and the recipient pays only the TX base fee (~5000 lamports).
 
-Privacy comes from the ZK proof: the withdraw does not require the sender to sign, and the nullifier prevents double spend.
+Privacy comes from the ZK proof: the withdraw does not require the sender to sign, and the nullifier prevents double spend. The recipient is chosen at withdrawal time, not deposit time.
 
 #### Privacy Notes
 
@@ -72,7 +72,7 @@ export GNARK_VERIFIER_BIN="$HOME/sunspot/gnark-solana/crates/verifier-bin"
 
 ## Keypairs and Airdrop
 
-Create the sender and relayer keypairs:
+Create the sender and relayer keypairs (relayer is only needed for the `initialize` instruction):
 
 ```bash
 solana-keygen new --outfile keypair/sender.json --no-bip39-passphrase -s
@@ -129,7 +129,8 @@ pnpm --dir client run test-shielded-pool
 
 ## Notes
 
-- **Fee payer**: the relayer pays transaction fees for initialize/withdraw.  
+- **No relayer required**: the recipient wallet submits the withdraw TX and pays the base fee (~5000 lamports). The vault PDA pays nullifier PDA rent, which is deducted from the withdrawal amount.
+- **Note string**: on deposit, a portable note string is generated encoding the user's secrets (`shield-sol-<base58>`). The user saves this string and uses it to withdraw from any wallet.
 - **Sender privacy**: the sender signs only the deposit. Withdraw uses proof verification and nullifier checks instead of a sender signature.
 - **Proof size**: current proofs are 388 bytes, plus a 140-byte public witness.
 
