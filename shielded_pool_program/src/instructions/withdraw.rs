@@ -20,20 +20,22 @@ pub const ZK_VERIFIER_PROGRAM_ID: Address =
     Address::from_str_const("AvND3W6TkZ9AenvsAyuPKSPSgLWZYmY2SPfb5T51pb7V");
 
 pub fn process_withdraw(accounts: &[AccountView], data: &[u8]) -> ProgramResult {
-    // Accounts: [recipient, vault, state, nullifier, zk_verifier, system_program]
-    // No relayer needed — the recipient (new wallet) submits the TX and pays the
-    // base fee (~5000 lamports). The vault PDA funds the nullifier PDA rent.
-    let [recipient, vault, state_account, nullifier_account, zk_verifier, _system_program] =
+    // Accounts: [payer (relayer), recipient, vault, state, nullifier, zk_verifier, system_program]
+    // The relayer pays the TX fee and nullifier PDA rent. The vault transfers the
+    // full withdrawal amount to the recipient. In the future, anyone who stakes
+    // the protocol token can become a relayer.
+    let [payer, recipient, vault, state_account, nullifier_account, zk_verifier, _system_program] =
         accounts
     else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
-    if !recipient.is_signer() {
+    if !payer.is_signer() {
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    if !recipient.is_writable()
+    if !payer.is_writable()
+        || !recipient.is_writable()
         || !vault.is_writable()
         || !nullifier_account.is_writable()
         || !state_account.is_writable()
@@ -118,7 +120,7 @@ pub fn process_withdraw(accounts: &[AccountView], data: &[u8]) -> ProgramResult 
     );
 
     // Verify vault PDA.
-    let (vault_pda, vault_bump) = Address::find_program_address(&[b"vault"], &crate::ID);
+    let (vault_pda, _vault_bump) = Address::find_program_address(&[b"vault"], &crate::ID);
     if vault.address() != &vault_pda {
         return Err(ProgramError::InvalidAccountData);
     }
@@ -142,57 +144,49 @@ pub fn process_withdraw(accounts: &[AccountView], data: &[u8]) -> ProgramResult 
     invoke(&verify_ix, &[])?;
 
     // Initialize nullifier account after proof verification.
-    // The vault PDA pays the rent for the nullifier account (deducted from
-    // the withdrawal amount sent to the recipient).
+    // The relayer (payer) funds the nullifier PDA creation. This works because
+    // the relayer is a normal wallet owned by the system program, so
+    // CreateAccount can debit it.
     let rent = Rent::get()?;
     let space = 0;
-    let nullifier_rent = rent.try_minimum_balance(space)?;
+    let lamports = rent.try_minimum_balance(space)?;
 
-    let null_bump_seed = [bump];
-    let null_seeds = [
+    let bump_seed = [bump];
+    let seeds = [
         Seed::from(b"nullifier"),
         Seed::from(&submitted_nullifier),
-        Seed::from(&null_bump_seed),
+        Seed::from(&bump_seed),
     ];
-
-    let vault_bump_seed = [vault_bump];
-    let vault_seeds = [Seed::from(b"vault"), Seed::from(&vault_bump_seed)];
-
-    let signers = [Signer::from(&null_seeds), Signer::from(&vault_seeds)];
+    let signer = [Signer::from(&seeds)];
 
     CreateAccount {
-        from: vault,
+        from: payer,
         to: nullifier_account,
-        lamports: nullifier_rent,
+        lamports,
         space: 0,
         owner: &crate::ID,
     }
-    .invoke_signed(&signers)?;
+    .invoke_signed(&signer)?;
 
     // Transfer SOL from the vault to the recipient.
-    // Deduct the nullifier rent from the payout (vault already paid it above).
+    // Keep the vault rent-exempt while withdrawing.
     let data_len = vault.data_len();
     let min_balance = Rent::get()?.try_minimum_balance(data_len)?;
     let withdrawable = vault
         .lamports()
         .checked_sub(min_balance)
         .ok_or(ProgramError::InsufficientFunds)?;
-
-    let payout = amount_u64
-        .checked_sub(nullifier_rent)
-        .ok_or(ProgramError::InsufficientFunds)?;
-
-    if payout > withdrawable {
+    if amount_u64 > withdrawable {
         return Err(ProgramError::InsufficientFunds);
     }
 
     let new_vault_balance = vault
         .lamports()
-        .checked_sub(payout)
+        .checked_sub(amount_u64)
         .ok_or(ProgramError::InsufficientFunds)?;
     let new_recipient_balance = recipient
         .lamports()
-        .checked_add(payout)
+        .checked_add(amount_u64)
         .ok_or(ProgramError::InsufficientFunds)?;
     vault.set_lamports(new_vault_balance);
     recipient.set_lamports(new_recipient_balance);
