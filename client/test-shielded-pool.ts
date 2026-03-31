@@ -32,6 +32,7 @@ import {
     ShieldedPoolMerkleTree,
 } from "./merkle.js";
 import { generateProof, type CircuitConfig } from "./proof.helper.js";
+import { generateNoteString, parseNoteString } from "./note.js";
 
 const RPC_URL = process.env.RPC_URL || "https://api.devnet.solana.com";
 
@@ -57,6 +58,7 @@ const circuitConfig: CircuitConfig = {
 
 const keypairDir = path.join(repoRoot, "keypair");
 const senderWalletPath = path.join(keypairDir, "sender.json");
+const relayerWalletPath = path.join(keypairDir, "relayer.json");
 
 const INSTRUCTION = {
     INITIALIZE: 0,
@@ -185,17 +187,19 @@ async function main() {
     });
 
     const sender = await loadKeypair(senderWalletPath);
-    const relayerWalletPath = path.join(keypairDir, "relayer.json");
+    // The relayer is only used as the fee payer for initialize.
+    // Withdrawals no longer need a relayer.
     const relayer = await loadKeypair(relayerWalletPath);
-    console.log(`Sender: ${sender.address}`);
-    console.log(`Relayer: ${relayer.address}`);
-    console.log(`Verifier Program: ${ZK_VERIFIER_PROGRAM_ID}`);
+    console.log(`Sender:  ${sender.address}`);
+    console.log(`Relayer: ${relayer.address} (initialize only)`);
+    console.log(`Verifier Program:      ${ZK_VERIFIER_PROGRAM_ID}`);
     console.log(`Shielded Pool Program: ${SHIELDED_POOL_PROGRAM_ID}`);
 
+    // The recipient is a fresh wallet that will submit the withdraw TX.
     const recipientSigner = await generateKeyPairSigner();
     const recipientPubkey = recipientSigner.address;
 
-    // 1. Off-chain State
+    // 1. Off-chain: generate deposit secrets
     const mt = new ShieldedPoolMerkleTree();
     const secret = randomField();
     const nullifierKey = randomField();
@@ -206,13 +210,27 @@ async function main() {
     const root = mt.getRoot();
     const nullifier = poseidonHash2(nullifierKey, BigInt(index));
 
+    // Generate the note string the user would save
+    const noteString = generateNoteString({ secret, nullifierKey, amount, leafIndex: index });
+    console.log(`\n--- Note String (save this!) ---`);
+    console.log(noteString);
+    console.log(`--------------------------------\n`);
+
+    // Parse it back to verify round-trip
+    const parsed = parseNoteString(noteString);
+    if (parsed.secret !== secret || parsed.nullifierKey !== nullifierKey
+        || parsed.amount !== amount || parsed.leafIndex !== index) {
+        throw new Error("Note string round-trip failed!");
+    }
+    console.log("Note string round-trip verified.");
+
     console.log(`Commitment: ${fieldToHex(commitment)}`);
     console.log(`Nullifier:  ${fieldToHex(nullifier)}`);
     console.log(`Root:       ${fieldToHex(root)}`);
     console.log(`Recipient:  ${recipientPubkey}`);
     console.log(`Amount:     ${amount} lamports`);
 
-    // 2. Generate Proof
+    // 2. Generate Proof (recipient chosen at withdrawal time)
     console.log("\nGenerating ZK Proof...");
     const recipientField = recipientFieldFromPubkey(recipientPubkey);
 
@@ -300,22 +318,22 @@ async function main() {
     data.set(proofResult.proof, 1);
     data.set(proofResult.publicWitness, 1 + proofResult.proof.length);
 
+    // No relayer needed for withdraw — the recipient is the signer & fee payer.
+    // role 3 = writable + signer
     const withdrawIx = {
         programAddress: SHIELDED_POOL_PROGRAM_ID,
         accounts: [
-            { address: relayer.address, role: 3 },  // fee payer (relayer)
-            { address: recipientPubkey, role: 1 },  // recipient
-            { address: vaultPda, role: 1 },         // vault
-            { address: statePda, role: 1 },         // state
-            { address: nullifierPda, role: 1 },     // nullifier
+            { address: recipientPubkey, role: 3 },  // recipient (signer + writable)
+            { address: vaultPda, role: 1 },          // vault
+            { address: statePda, role: 1 },          // state
+            { address: nullifierPda, role: 1 },      // nullifier
             { address: ZK_VERIFIER_PROGRAM_ID, role: 0 },
             { address: SYSTEM_PROGRAM_ADDRESS, role: 0 },
         ],
         data,
     };
     const withdrawAccounts = [
-        { name: "fee_payer", address: relayer.address },
-        { name: "recipient", address: recipientPubkey },
+        { name: "recipient (signer)", address: recipientPubkey },
         { name: "vault_pda", address: vaultPda },
         { name: "state_pda", address: statePda },
         { name: "nullifier_pda", address: nullifierPda },
@@ -360,15 +378,16 @@ async function main() {
     const wrongRecipientSigner = await generateKeyPairSigner();
     const wrongRecipientIx = {
         ...withdrawIx,
-        accounts: withdrawIx.accounts.map((account, index) =>
-            index === 1 ? { ...account, address: wrongRecipientSigner.address } : account
+        accounts: withdrawIx.accounts.map((account, idx) =>
+            idx === 0 ? { ...account, address: wrongRecipientSigner.address } : account
         ),
     };
 
+    // Negative tests: recipient is the fee payer for withdraw TXs.
     await expectFailure(
         sendAndConfirm,
         rpc,
-        relayer,
+        recipientSigner,
         [],
         corruptedWithdrawIx,
         "Expected Failure: Invalid Proof"
@@ -376,7 +395,7 @@ async function main() {
     await expectFailure(
         sendAndConfirm,
         rpc,
-        relayer,
+        wrongRecipientSigner,
         [],
         wrongRecipientIx,
         "Expected Failure: Recipient Mismatch"
@@ -384,8 +403,9 @@ async function main() {
 
     logBusinessAccounts("\nWithdraw Accounts:", withdrawAccounts);
     console.log("Sending Withdrawal Transaction...");
+    // Recipient is both the signer and fee payer — no relayer needed.
     try {
-        await sendTransaction(sendAndConfirm, rpc, relayer, [], [withdrawIx], 600_000, "Withdrawal");
+        await sendTransaction(sendAndConfirm, rpc, recipientSigner, [], [withdrawIx], 600_000, "Withdrawal");
     } catch (err: any) {
         console.log("\n❌ Withdrawal Failed (Expected if programs not yet deployed)");
         if (err.context?.logs) {
@@ -398,7 +418,7 @@ async function main() {
     await expectFailure(
         sendAndConfirm,
         rpc,
-        relayer,
+        recipientSigner,
         [],
         withdrawIx,
         "Expected Failure: Double Spend (Nullifier Reuse)"
