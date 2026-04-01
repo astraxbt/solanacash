@@ -1,0 +1,111 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: #08090a;
+  --color-foreground: #dde1e8;
+  --color-card: #0d0e15;
+  --color-card-foreground: #dde1e8;
+  --color-border: hsl(220, 15%, 14%);
+  --color-muted: hsl(220, 10%, 45%);
+  --color-accent: #00ed89;
+  --color-accent-dim: rgba(0, 237, 137, 0.15);
+  --color-accent-border: rgba(0, 237, 137, 0.25);
+  --color-danger: #ef4444;
+  --color-surface: hsl(220, 18%, 6%);
+  --color-surface-elevated: hsl(220, 18%, 8%);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: #08090a;
+  color: var(--color-foreground);
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+/* Noise texture overlay */
+body::after {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+  opacity: 0.3;
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* Glow animations */
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 4px rgba(0, 237, 137, 0.2); }
+  50% { box-shadow: 0 0 20px rgba(0, 237, 137, 0.4); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-6px); }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.animate-shimmer {
+  background: linear-gradient(90deg, transparent, rgba(0, 237, 137, 0.08), transparent);
+  background-size: 200% 100%;
+  animation: shimmer 3s ease-in-out infinite;
+}
+
+.animate-float {
+  animation: float 4s ease-in-out infinite;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(220, 15%, 18%);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(220, 15%, 25%);
+}
+
+/* Wallet adapter overrides */
+.wallet-adapter-button {
+  background: transparent !important;
+  border: 1px solid hsl(220, 15%, 14%) !important;
+  border-radius: 6px !important;
+  font-size: 13px !important;
+  height: 36px !important;
+  padding: 0 16px !important;
+  color: rgba(255, 255, 255, 0.7) !important;
+  transition: all 0.2s ease !important;
+}
+.wallet-adapter-button:hover {
+  border-color: rgba(0, 237, 137, 0.4) !important;
+  color: #00ed89 !important;
+}
+.wallet-adapter-button-trigger {
+  background: rgba(0, 237, 137, 0.1) !important;
+  border-color: rgba(0, 237, 137, 0.3) !important;
+  color: #00ed89 !important;
+}
+.wallet-adapter-modal-wrapper {
+  background: #0d0e15 !important;
+  border: 1px solid hsl(220, 15%, 14%) !important;
+}
+.wallet-adapter-modal-title {
+  color: rgba(255, 255, 255, 0.9) !important;
+}
