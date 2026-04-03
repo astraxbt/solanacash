@@ -8,7 +8,7 @@ use solana_program_log::log;
 pub mod instructions;
 pub mod state;
 
-declare_id!("FHsd7GZobRveRNN1e4TrfAu6ByMk9TUprCP68Gt4s79S");
+declare_id!("33k7WbNmCBgwQMhH4Y9fQHJpkr7HS3GYKomZHbuBbPso");
 
 entrypoint!(process_instruction);
 

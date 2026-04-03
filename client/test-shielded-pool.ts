@@ -178,20 +178,20 @@ async function main() {
 
     await initPoseidon();
     const rpc = createSolanaRpc(RPC_URL);
-    const rpcSubscriptions = createSolanaRpcSubscriptions(
-        RPC_URL.replace("https://", "wss://").replace("http://", "ws://")
-    );
+    // Local test validator: WS on port 8900, devnet: wss://api.devnet.solana.com
+    const wsUrl = RPC_URL.includes("localhost") || RPC_URL.includes("127.0.0.1")
+        ? RPC_URL.replace("http://", "ws://").replace(":8899", ":8900")
+        : RPC_URL.replace("https://", "wss://").replace("http://", "ws://");
+    const rpcSubscriptions = createSolanaRpcSubscriptions(wsUrl);
     const sendAndConfirm = sendAndConfirmTransactionFactory({
         rpc,
         rpcSubscriptions,
     });
 
     const sender = await loadKeypair(senderWalletPath);
-    // The relayer is only used as the fee payer for initialize.
-    // Withdrawals no longer need a relayer.
     const relayer = await loadKeypair(relayerWalletPath);
     console.log(`Sender:  ${sender.address}`);
-    console.log(`Relayer: ${relayer.address} (initialize only)`);
+    console.log(`Relayer: ${relayer.address}`);
     console.log(`Verifier Program:      ${ZK_VERIFIER_PROGRAM_ID}`);
     console.log(`Shielded Pool Program: ${SHIELDED_POOL_PROGRAM_ID}`);
 
@@ -318,22 +318,24 @@ async function main() {
     data.set(proofResult.proof, 1);
     data.set(proofResult.publicWitness, 1 + proofResult.proof.length);
 
-    // No relayer needed for withdraw — the recipient is the signer & fee payer.
-    // role 3 = writable + signer
+    // Relayer pays TX fee + nullifier PDA rent. Vault transfers full amount to recipient.
+    // role 3 = writable + signer, role 1 = writable, role 0 = readonly
     const withdrawIx = {
         programAddress: SHIELDED_POOL_PROGRAM_ID,
         accounts: [
-            { address: recipientPubkey, role: 3 },  // recipient (signer + writable)
-            { address: vaultPda, role: 1 },          // vault
-            { address: statePda, role: 1 },          // state
-            { address: nullifierPda, role: 1 },      // nullifier
+            { address: relayer.address, role: 3 },   // payer (relayer, signer + writable)
+            { address: recipientPubkey, role: 1 },    // recipient (writable)
+            { address: vaultPda, role: 1 },            // vault
+            { address: statePda, role: 1 },            // state
+            { address: nullifierPda, role: 1 },        // nullifier
             { address: ZK_VERIFIER_PROGRAM_ID, role: 0 },
             { address: SYSTEM_PROGRAM_ADDRESS, role: 0 },
         ],
         data,
     };
     const withdrawAccounts = [
-        { name: "recipient (signer)", address: recipientPubkey },
+        { name: "payer (relayer)", address: relayer.address },
+        { name: "recipient", address: recipientPubkey },
         { name: "vault_pda", address: vaultPda },
         { name: "state_pda", address: statePda },
         { name: "nullifier_pda", address: nullifierPda },
@@ -357,7 +359,7 @@ async function main() {
     logBusinessAccounts("\nDeposit Accounts:", depositAccounts);
     console.log("Sending Deposit Transaction...");
     try {
-        await sendTransaction(sendAndConfirm, rpc, relayer, [sender], [depositIx], 200_000, "Deposit");
+        await sendTransaction(sendAndConfirm, rpc, sender, [], [depositIx], 200_000, "Deposit");
     } catch (err: any) {
         console.log("\n❌ Deposit Failed (Expected if programs not yet deployed)");
         if (err.context?.logs) {
@@ -379,15 +381,15 @@ async function main() {
     const wrongRecipientIx = {
         ...withdrawIx,
         accounts: withdrawIx.accounts.map((account, idx) =>
-            idx === 0 ? { ...account, address: wrongRecipientSigner.address } : account
+            idx === 1 ? { ...account, address: wrongRecipientSigner.address } : account
         ),
     };
 
-    // Negative tests: recipient is the fee payer for withdraw TXs.
+    // Negative tests: relayer is the fee payer for withdraw TXs.
     await expectFailure(
         sendAndConfirm,
         rpc,
-        recipientSigner,
+        relayer,
         [],
         corruptedWithdrawIx,
         "Expected Failure: Invalid Proof"
@@ -395,7 +397,7 @@ async function main() {
     await expectFailure(
         sendAndConfirm,
         rpc,
-        wrongRecipientSigner,
+        relayer,
         [],
         wrongRecipientIx,
         "Expected Failure: Recipient Mismatch"
@@ -403,9 +405,9 @@ async function main() {
 
     logBusinessAccounts("\nWithdraw Accounts:", withdrawAccounts);
     console.log("Sending Withdrawal Transaction...");
-    // Recipient is both the signer and fee payer — no relayer needed.
+    // Relayer is the fee payer; recipient receives the full withdrawal amount.
     try {
-        await sendTransaction(sendAndConfirm, rpc, recipientSigner, [], [withdrawIx], 600_000, "Withdrawal");
+        await sendTransaction(sendAndConfirm, rpc, relayer, [], [withdrawIx], 600_000, "Withdrawal");
     } catch (err: any) {
         console.log("\n❌ Withdrawal Failed (Expected if programs not yet deployed)");
         if (err.context?.logs) {
@@ -418,7 +420,7 @@ async function main() {
     await expectFailure(
         sendAndConfirm,
         rpc,
-        recipientSigner,
+        relayer,
         [],
         withdrawIx,
         "Expected Failure: Double Spend (Nullifier Reuse)"
