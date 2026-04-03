@@ -65,7 +65,6 @@ fn main(
     //    and amount together in a single constraint. This ensures:
     //    (a) The Noir compiler cannot optimize away the recipient field
     //    (b) All three values are interdependent in the constraint system
-    //    (c) The on-chain program can verify this binding hash independently
     let withdrawal_binding = dep::poseidon::poseidon::bn254::hash_3([
         calculated_nullifier,
         recipient,
