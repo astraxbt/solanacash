@@ -23,7 +23,7 @@ Shielded Pool (repo)
 
 1) **Initialize**: admin creates state + vault PDAs.  
 2) **Deposit**: sender transfers SOL into the vault and updates the Merkle root. Receives a **note string** encoding their secrets.  
-3) **Withdraw**: recipient (any new wallet) submits proof, program verifies the proof, consumes the nullifier, and releases SOL to the recipient. **No relayer needed** — the vault PDA pays nullifier rent, and the recipient pays only the TX base fee (~5000 lamports).
+3) **Withdraw**: relayer submits proof on behalf of the recipient. The program verifies the ZK proof, consumes the nullifier, and releases the full withdrawal amount to the recipient. The relayer pays the TX fee and nullifier PDA rent.
 
 Privacy comes from the ZK proof: the withdraw does not require the sender to sign, and the nullifier prevents double spend. The recipient is chosen at withdrawal time, not deposit time.
 
@@ -129,10 +129,47 @@ pnpm --dir client run test-shielded-pool
 
 ## Notes
 
-- **No relayer required**: the recipient wallet submits the withdraw TX and pays the base fee (~5000 lamports). The vault PDA pays nullifier PDA rent, which is deducted from the withdrawal amount.
+- **Relayer architecture**: the relayer pays transaction fees and nullifier PDA rent for withdrawals. The recipient receives the full deposit amount. In the future, anyone who stakes the protocol token can become a relayer.
 - **Note string**: on deposit, a portable note string is generated encoding the user's secrets (`shield-sol-<base58>`). The user saves this string and uses it to withdraw from any wallet.
 - **Sender privacy**: the sender signs only the deposit. Withdraw uses proof verification and nullifier checks instead of a sender signature.
 - **Proof size**: current proofs are 388 bytes, plus a 140-byte public witness.
+- **Upgradeable**: the program is deployed with upgrade authority, allowing new features to be added without redeployment or loss of existing deposits.
+
+## Upgrade Log
+
+This section tracks all upgrades to the on-chain program and circuit, starting from the barebones v1.
+
+### v1.0 — Base Implementation
+
+- Noir ZK circuit with Groth16 verification via Sunspot
+- Deposit: sender transfers SOL + commitment into vault, Merkle tree updated on-chain
+- Withdraw: relayer submits proof, program verifies via CPI to verifier, nullifier consumed, SOL released to recipient
+- Note string generation (`shield-sol-<base58>`) for portable secret storage
+- Poseidon hash for commitments and nullifiers (ZK-friendly)
+- Depth-16 Merkle tree (65,536 leaf capacity)
+- Double-spend prevention via nullifier PDAs
+
+### v1.1 — Recipient + Amount Binding (PR #4)
+
+- **Circuit**: Strengthened recipient and amount binding in the ZK proof
+  - Added `withdrawal_binding = H(nullifier, recipient, amount)` constraint that ties all three values together in the constraint system
+  - Ensures the Noir compiler cannot optimize away the recipient field from the proof
+  - Added explicit `amount != 0` constraint (defense in depth)
+  - Replaced weak `assert(recipient != 0)` with a Poseidon hash binding
+- **Program**: Restored relayer architecture for withdrawals
+  - Relayer pays TX fees and nullifier PDA rent
+  - Recipient receives the full withdrawal amount (no deductions)
+  - Prepares for future relayer staking/registry system
+- **Test client**: Updated for relayer-based withdrawal flow, WebSocket port fix for local validator
+
+### Planned Upgrades
+
+- **Pool Pause**: Admin can pause/unpause deposits and withdrawals
+- **Fixed Denominations**: On-chain enforcement of fixed pool sizes (0.1, 1, 10, 100 SOL)
+- **Admin Transfer**: Transfer upgrade authority to a new admin
+- **Relayer Withdrawal Fee**: On-chain fee mechanism for relayers
+- **Cross-Pool Atomic Swaps**: Atomically swap between denomination pools (research)
+- **Relayer Registry**: Stake protocol tokens to become a relayer
 
 ## Resources
 
