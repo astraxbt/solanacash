@@ -63,26 +63,38 @@ export default function WithdrawPanel() {
     setTxHash(null);
 
     try {
-      // The withdrawal flow requires:
-      // 1. Parse note string -> secret, nullifierKey, amount, leafIndex
-      // 2. Reconstruct Merkle tree and compute proof (needs indexer)
-      // 3. Generate ZK proof via sunspot prove (CLI tool, ~2s)
-      // 4. Submit TX through relayer: [payer, recipient, vault, state, nullifier, verifier, system]
-      //
-      // Steps 2-3 cannot run in the browser (sunspot is a Go CLI tool that
-      // generates Groth16 proofs). A relayer service or CLI is required.
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      setError(
-        "Withdrawal requires ZK proof generation which runs via CLI. " +
-          "Use the test client:\n" +
-          "cd client && pnpm run test-shielded-pool"
-      );
+      const relayerUrl =
+        process.env.NEXT_PUBLIC_RELAYER_URL || "http://localhost:3001";
+
+      const resp = await fetch(`${relayerUrl}/api/withdraw`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          noteString: noteString.trim(),
+          recipientAddress: recipientAddress.trim(),
+        }),
+      });
+
+      const result = await resp.json();
+
+      if (!resp.ok) {
+        throw new Error(result.error || `Relayer error (${resp.status})`);
+      }
+
+      setTxHash(result.txHash);
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Withdrawal failed. Please try again."
-      );
+      if (err instanceof TypeError && err.message.includes("fetch")) {
+        setError(
+          "Could not reach relayer service. Make sure the relayer is running:\n" +
+            "cd relayer && npm run dev"
+        );
+      } else {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Withdrawal failed. Please try again."
+        );
+      }
     } finally {
       setIsWithdrawing(false);
     }

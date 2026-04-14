@@ -156,6 +156,22 @@ export default function DepositPanel({ onDeposit }: DepositPanelProps) {
       existingCommitments.push(commitment);
       saveTreeState(existingCommitments);
 
+      // Notify relayer of the new deposit so it can track the Merkle tree
+      const relayerUrl =
+        process.env.NEXT_PUBLIC_RELAYER_URL || "http://localhost:3001";
+      try {
+        await fetch(`${relayerUrl}/api/deposit-notify`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            commitment: "0x" + commitment.toString(16).padStart(64, "0"),
+          }),
+        });
+      } catch {
+        // Relayer notification is best-effort; deposit still succeeds on-chain
+        console.warn("Could not notify relayer of deposit");
+      }
+
       // Generate note string for the user to save
       const noteData: NoteData = {
         secret,
