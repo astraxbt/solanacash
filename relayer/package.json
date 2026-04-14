@@ -1,0 +1,26 @@
+{
+  "name": "@solanacash/relayer",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "npx tsx watch src/server.ts",
+    "start": "npx tsx src/server.ts"
+  },
+  "dependencies": {
+    "@solana-program/compute-budget": "^0.11.0",
+    "@solana-program/system": "^0.10.0",
+    "@solana/kit": "^5.1.0",
+    "bs58": "^6.0.0",
+    "circomlibjs": "^0.1.7",
+    "cors": "^2.8.5",
+    "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "@types/circomlibjs": "^0.1.6",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^25.0.8",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

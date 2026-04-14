@@ -1,0 +1,25 @@
+version: "3.8"
+
+services:
+  relayer:
+    build:
+      context: ..
+      dockerfile: relayer/Dockerfile
+    ports:
+      - "3001:3001"
+    volumes:
+      # Mount your relayer wallet keypair
+      - ./keypair:/app/keypair:ro
+      # Persist Merkle tree state across restarts
+      - relayer-data:/app/data
+    environment:
+      - PORT=3001
+      - RPC_URL=${RPC_URL:-https://api.devnet.solana.com}
+      - SHIELDED_POOL_PROGRAM_ID=${SHIELDED_POOL_PROGRAM_ID:-33k7WbNmCBgwQMhH4Y9fQHJpkr7HS3GYKomZHbuBbPso}
+      - ZK_VERIFIER_PROGRAM_ID=${ZK_VERIFIER_PROGRAM_ID:-GzJDDpR3MxDmSq36EZLZ6amET9dJx5SMfb9dUTfp5cEB}
+      - RELAYER_WALLET_PATH=/app/keypair/relayer.json
+      - TREE_STATE_PATH=/app/data/tree-state.json
+    restart: unless-stopped
+
+volumes:
+  relayer-data:
